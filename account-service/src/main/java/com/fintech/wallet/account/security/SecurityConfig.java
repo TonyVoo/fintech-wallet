@@ -2,6 +2,8 @@ package com.fintech.wallet.account.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -15,20 +17,42 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import javax.crypto.spec.SecretKeySpec;
 import java.util.Base64;
 import java.util.List;
 
 /**
- * account-service does not log anyone in. It only verifies access tokens issued by auth-service
- * (same HMAC secret, same issuer) and trusts the claims inside them.
+ * Two separate chains:
+ * <ul>
+ *   <li>/internal/** : service-to-service calls, authenticated by an API key;</li>
+ *   <li>everything else : end-user calls, authenticated by a JWT issued by auth-service.</li>
+ * </ul>
+ * account-service does not log anyone in. It only verifies access tokens (same HMAC secret, same issuer)
+ * and trusts the claims inside them.
  */
 @Configuration
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+    @Order(1)
+    SecurityFilterChain internalChain(HttpSecurity http, InternalApiProperties properties) throws Exception {
+        http
+                .securityMatcher("/internal/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("SERVICE"))
+                .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .addFilterBefore(new InternalApiKeyFilter(properties.apiKey()),
+                        UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
+    SecurityFilterChain userChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable) // stateless API, no cookies/sessions
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

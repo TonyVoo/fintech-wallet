@@ -1,5 +1,6 @@
 package com.fintech.wallet.account;
 
+import com.fintech.wallet.account.security.InternalApiKeyFilter;
 import com.fintech.wallet.account.security.JwtProperties;
 import com.jayway.jsonpath.JsonPath;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -9,6 +10,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -36,6 +38,7 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -56,6 +59,9 @@ class AccountApiIT {
 
     @Autowired
     JwtProperties jwt;
+
+    @Value("${app.internal.api-key}")
+    String internalKey;
 
     // ---------------------------------------------------------------- authentication
 
@@ -167,7 +173,97 @@ class AccountApiIT {
         assertThat(balance(user, id)).isEqualByComparingTo("10");
     }
 
+    // ---------------------------------------------------------------- service-to-service API
+
+    @Test
+    void internalEndpointsNeedTheServiceApiKey() throws Exception {
+        String user = bearer(UUID.randomUUID(), "ADMIN");
+        String id = createAccount(user);
+        String body = "{\"operationId\":\"op-" + UUID.randomUUID() + "\",\"amount\":1}";
+
+        mvc.perform(post("/internal/accounts/" + id + "/credit").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/internal/accounts/" + id + "/credit").header(InternalApiKeyFilter.HEADER, "wrong-key")
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        // even an ADMIN user token is not a service credential
+        mvc.perform(post("/internal/accounts/" + id + "/credit").header("Authorization", user)
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized());
+        // and the service key is not a user credential
+        mvc.perform(get("/api/accounts/" + id).header(InternalApiKeyFilter.HEADER, internalKey))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void sameOperationIdIsAppliedOnlyOnce() throws Exception {
+        String owner = bearer(UUID.randomUUID(), "USER");
+        String id = createAccount(owner);
+        deposit(owner, id, "100").andExpect(status().isOk());
+        String op = "op-" + UUID.randomUUID();
+
+        internal(id, "debit", op, "30").andExpect(status().isOk()).andExpect(jsonPath("$.status").value("APPLIED"));
+        // a retry after a timeout: same answer, no second debit
+        internal(id, "debit", op, "30").andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ALREADY_APPLIED"));
+
+        assertThat(balance(owner, id)).isEqualByComparingTo("70");
+
+        // same id but a different amount can only be a caller bug: refuse it
+        internal(id, "debit", op, "31").andExpect(status().isConflict());
+        assertThat(balance(owner, id)).isEqualByComparingTo("70");
+    }
+
+    @Test
+    void internalDebitCannotOverdrawAndUnknownAccountsAreReported() throws Exception {
+        String owner = bearer(UUID.randomUUID(), "USER");
+        String id = createAccount(owner);
+        deposit(owner, id, "10").andExpect(status().isOk());
+
+        internal(id, "debit", "op-" + UUID.randomUUID(), "10.01").andExpect(status().isUnprocessableEntity());
+        internal(UUID.randomUUID().toString(), "credit", "op-" + UUID.randomUUID(), "5")
+                .andExpect(status().isNotFound());
+
+        assertThat(balance(owner, id)).isEqualByComparingTo("10");
+    }
+
+    @Test
+    void internalCreditAndLookupWork() throws Exception {
+        UUID ownerId = UUID.randomUUID();
+        String owner = bearer(ownerId, "USER");
+        String id = createAccount(owner);
+
+        internal(id, "credit", "op-" + UUID.randomUUID(), "25.5").andExpect(status().isOk());
+
+        assertThat(balance(owner, id)).isEqualByComparingTo("25.5");
+        mvc.perform(get("/internal/accounts/" + id).header(InternalApiKeyFilter.HEADER, internalKey))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ownerId").value(ownerId.toString()))
+                .andExpect(jsonPath("$.currency").value("VND"));
+    }
+
+    @Test
+    void manyParallelCopiesOfTheSameOperationChangeTheBalanceOnce() throws Exception {
+        String owner = bearer(UUID.randomUUID(), "USER");
+        String id = createAccount(owner);
+        deposit(owner, id, "100").andExpect(status().isOk());
+        String op = "op-" + UUID.randomUUID();
+
+        List<Integer> statuses = runConcurrently(10, () -> internal(id, "debit", op, "10").andReturn().getResponse().getStatus());
+
+        assertThat(statuses).hasSize(10).allMatch(s -> s == 200);
+        assertThat(balance(owner, id)).isEqualByComparingTo("90");
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    private org.springframework.test.web.servlet.ResultActions internal(String accountId, String action, String operationId,
+                                                                        String amount) throws Exception {
+        return mvc.perform(post("/internal/accounts/" + accountId + "/" + action)
+                .header(InternalApiKeyFilter.HEADER, internalKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"operationId\":\"" + operationId + "\",\"amount\":" + amount + "}"));
+    }
 
     private String createAccount(String bearer) throws Exception {
         MvcResult result = mvc.perform(post("/api/accounts").header("Authorization", bearer)

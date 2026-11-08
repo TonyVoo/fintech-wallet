@@ -1,0 +1,40 @@
+server:
+  port: 8093
+
+spring:
+  application:
+    name: transaction-service
+  datasource:
+    url: jdbc:postgresql://localhost:5444/transaction_db
+    username: wallet
+    password: wallet
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+app:
+  jwt:
+    # Must match auth-service. DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+    issuer: fintech-wallet-auth
+  accounts:
+    base-url: http://localhost:8091
+    # Must match account-service. DEV DEFAULT ONLY: override with INTERNAL_API_KEY.
+    api-key: ${INTERNAL_API_KEY:dev-internal-key-change-me}
+    connect-timeout: 2s
+    read-timeout: 5s
+  recovery:
+    enabled: true
+    interval-ms: 15000
+    # a transfer untouched for this long is considered stuck and is driven forward again
+    stale-after: 30s
+    batch-size: 50
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
