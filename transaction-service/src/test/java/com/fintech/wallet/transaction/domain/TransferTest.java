@@ -14,7 +14,8 @@ class TransferTest {
     private final UUID to = UUID.randomUUID();
 
     private Transfer newTransfer() {
-        return new Transfer(UUID.randomUUID(), "key-1", from, to, new BigDecimal("100.00"), "VND", null);
+        return new Transfer(UUID.randomUUID(), "key-1", from, to, UUID.randomUUID(),
+                new BigDecimal("100.00"), "VND", null);
     }
 
     @Test

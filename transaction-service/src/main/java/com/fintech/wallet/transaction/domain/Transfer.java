@@ -32,6 +32,10 @@ public class Transfer {
     @Column(name = "to_account_id", nullable = false)
     private UUID toAccountId;
 
+    /** Owner of the destination account; used to notify the receiver. */
+    @Column(name = "to_user_id")
+    private UUID toUserId;
+
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
 
@@ -63,13 +67,14 @@ public class Transfer {
         // for JPA
     }
 
-    public Transfer(UUID userId, String idempotencyKey, UUID fromAccountId, UUID toAccountId,
+    public Transfer(UUID userId, String idempotencyKey, UUID fromAccountId, UUID toAccountId, UUID toUserId,
                     BigDecimal amount, String currency, String description) {
         this.id = UUID.randomUUID();
         this.userId = userId;
         this.idempotencyKey = idempotencyKey;
         this.fromAccountId = fromAccountId;
         this.toAccountId = toAccountId;
+        this.toUserId = toUserId;
         this.amount = amount;
         this.currency = currency;
         this.description = description;
@@ -142,6 +147,7 @@ public class Transfer {
     public String getIdempotencyKey() { return idempotencyKey; }
     public UUID getFromAccountId() { return fromAccountId; }
     public UUID getToAccountId() { return toAccountId; }
+    public UUID getToUserId() { return toUserId; }
     public BigDecimal getAmount() { return amount; }
     public String getCurrency() { return currency; }
     public String getDescription() { return description; }

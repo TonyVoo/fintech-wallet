@@ -55,7 +55,8 @@ public class TransferService {
 
         Transfer created;
         try {
-            created = store.createPending(userId, idempotencyKey, from, to, amount, source.currency(), description);
+            created = store.createPending(userId, idempotencyKey, from, to, destination.ownerId(),
+                    amount, source.currency(), description);
         } catch (DataIntegrityViolationException e) {
             // two requests with the same key arrived together and the other one won the insert
             Transfer winner = store.find(userId, idempotencyKey).orElseThrow(() -> e);

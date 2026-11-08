@@ -5,6 +5,7 @@ import com.fintech.wallet.transaction.domain.FailureReason;
 import com.fintech.wallet.transaction.domain.LedgerEntry;
 import com.fintech.wallet.transaction.domain.Transfer;
 import com.fintech.wallet.transaction.domain.TransferStatus;
+import com.fintech.wallet.transaction.outbox.OutboxWriter;
 import com.fintech.wallet.transaction.repository.LedgerEntryRepository;
 import com.fintech.wallet.transaction.repository.TransferRepository;
 import org.springframework.stereotype.Component;
@@ -23,26 +24,29 @@ import java.util.UUID;
  *
  * <p>Each transition locks the transfer row first ({@code SELECT ... FOR UPDATE}), so concurrent actors take
  * turns, and is idempotent: if the transfer has already moved past the expected state (another request or the
- * recovery job got there first) the current state is returned and nothing changes. The ledger entries are
- * written in the same transaction as the COMPLETED transition, so they exist exactly once, or not at all.
+ * recovery job got there first) the current state is returned and nothing changes. The ledger entries and the
+ * outbox event are written in the same transaction as the transition, so they exist exactly once, or not at all.
  */
 @Component
 public class TransferStore {
 
     private final TransferRepository transfers;
     private final LedgerEntryRepository ledger;
+    private final OutboxWriter outbox;
 
-    public TransferStore(TransferRepository transfers, LedgerEntryRepository ledger) {
+    public TransferStore(TransferRepository transfers, LedgerEntryRepository ledger, OutboxWriter outbox) {
         this.transfers = transfers;
         this.ledger = ledger;
+        this.outbox = outbox;
     }
 
     @Transactional
-    public Transfer createPending(UUID userId, String idempotencyKey, UUID from, UUID to,
+    public Transfer createPending(UUID userId, String idempotencyKey, UUID from, UUID to, UUID toUserId,
                                   BigDecimal amount, String currency, String description) {
         // the unique (user_id, idempotency_key) constraint rejects a concurrent duplicate with
         // DataIntegrityViolationException; the caller then loads the winner
-        return transfers.saveAndFlush(new Transfer(userId, idempotencyKey, from, to, amount, currency, description));
+        return transfers.saveAndFlush(
+                new Transfer(userId, idempotencyKey, from, to, toUserId, amount, currency, description));
     }
 
     @Transactional(readOnly = true)
@@ -72,6 +76,7 @@ public class TransferStore {
             t.markCompleted();
             ledger.save(new LedgerEntry(t.getId(), t.getFromAccountId(), EntryDirection.DEBIT, t.getAmount(), t.getCurrency()));
             ledger.save(new LedgerEntry(t.getId(), t.getToAccountId(), EntryDirection.CREDIT, t.getAmount(), t.getCurrency()));
+            outbox.record(t);
         }
         return t;
     }
@@ -81,6 +86,7 @@ public class TransferStore {
         Transfer t = lock(id);
         if (t.getStatus() == TransferStatus.PENDING) {
             t.markFailed(reason);
+            outbox.record(t);
         }
         return t;
     }
@@ -90,6 +96,7 @@ public class TransferStore {
         Transfer t = lock(id);
         if (t.getStatus() == TransferStatus.DEBITED) {
             t.markRefunded(reason);
+            outbox.record(t);
         }
         return t;
     }

@@ -14,6 +14,18 @@ spring:
       ddl-auto: validate
   flyway:
     enabled: true
+  kafka:
+    bootstrap-servers: localhost:9094
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        # fail fast when the broker is unreachable; the outbox keeps the event and retries later
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
 
 app:
   jwt:
@@ -32,6 +44,13 @@ app:
     # a transfer untouched for this long is considered stuck and is driven forward again
     stale-after: 30s
     batch-size: 50
+
+  outbox:
+    enabled: true
+    interval-ms: 1000
+    topic: transfer-events
+    batch-size: 100
+    send-timeout: 5s
 
 management:
   endpoints:
