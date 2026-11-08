@@ -1,0 +1,28 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: account-service
+  datasource:
+    url: jdbc:postgresql://localhost:5442/account_db
+    username: wallet
+    password: wallet
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+app:
+  jwt:
+    # Must match auth-service. DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+    issuer: fintech-wallet-auth
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

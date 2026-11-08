@@ -1,0 +1,29 @@
+server:
+  port: 8092
+
+spring:
+  application:
+    name: auth-service
+  datasource:
+    url: jdbc:postgresql://localhost:5443/auth_db
+    username: wallet
+    password: wallet
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+
+app:
+  jwt:
+    # Base64-encoded HMAC key (>= 32 bytes). DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

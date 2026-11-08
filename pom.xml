@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.7</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.fintech.wallet</groupId>
+    <artifactId>fintech-wallet</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>fintech-wallet</name>
+    <description>E-wallet / payment system built with microservices</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <!-- 1.21.4+ speaks a Docker API version that Docker Engine 29 accepts; Boot 3.5.7 manages an older one -->
+        <testcontainers.version>1.21.4</testcontainers.version>
+    </properties>
+
+    <modules>
+        <module>account-service</module>
+        <module>auth-service</module>
+    </modules>
+
+    <build>
+        <plugins>
+            <!--
+              Unit tests (*Test) run with `mvn test` and need nothing external.
+              Integration tests (*IT) need Docker (Testcontainers) and run with `mvn verify`.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- the Spring Boot repackaged jar cannot be used as a plain classpath -->
+                    <classesDirectory>${project.build.outputDirectory}</classesDirectory>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
