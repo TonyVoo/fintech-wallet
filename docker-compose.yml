@@ -1,6 +1,29 @@
+# Two ways to use this file:
+#
+#   docker compose up -d                       infrastructure only (4x PostgreSQL, Kafka, Redis) - run the services
+#                                              from your IDE / `mvn spring-boot:run`, they talk to localhost ports
+#   docker compose --profile app up -d --build the whole system in containers; only the gateway (:8080) is published
+#
+# Memory is kept small on purpose: measured, the full stack uses about 2 GB (each service ~230-260 MB).
+
+x-postgres: &postgres
+  image: postgres:16-alpine
+  restart: unless-stopped
+  mem_limit: 128m
+
+x-java-service: &java-service
+  profiles: ["app"]
+  restart: unless-stopped
+  mem_limit: 400m
+
+x-secrets: &secrets
+  JWT_SECRET: ${JWT_SECRET:-ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-internal-key-change-me}
+
 services:
+  # ------------------------------------------------------------------ infrastructure
   account-db:
-    image: postgres:16-alpine
+    <<: *postgres
     container_name: wallet-account-db
     environment:
       POSTGRES_DB: account_db
@@ -10,9 +33,14 @@ services:
       - "5442:5432"
     volumes:
       - account-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d account_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   auth-db:
-    image: postgres:16-alpine
+    <<: *postgres
     container_name: wallet-auth-db
     environment:
       POSTGRES_DB: auth_db
@@ -22,9 +50,14 @@ services:
       - "5443:5432"
     volumes:
       - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d auth_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   transaction-db:
-    image: postgres:16-alpine
+    <<: *postgres
     container_name: wallet-transaction-db
     environment:
       POSTGRES_DB: transaction_db
@@ -34,9 +67,14 @@ services:
       - "5444:5432"
     volumes:
       - transaction-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d transaction_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   notification-db:
-    image: postgres:16-alpine
+    <<: *postgres
     container_name: wallet-notification-db
     environment:
       POSTGRES_DB: notification_db
@@ -46,32 +84,138 @@ services:
       - "5445:5432"
     volumes:
       - notification-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wallet -d notification_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   # rate-limit counters of the api-gateway; host port 6390 to avoid clashing with other local Redis servers
   redis:
     image: redis:7-alpine
     container_name: wallet-redis
+    restart: unless-stopped
+    mem_limit: 64m
     ports:
       - "6390:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-  # single-node Kafka in KRaft mode (no ZooKeeper); host port 9094 to avoid clashing with other local brokers
+  # single-node Kafka in KRaft mode (no ZooKeeper). Two listeners:
+  #   localhost:9094  for services started from the host (IDE, mvn spring-boot:run)
+  #   kafka:9092      for services running as containers in this compose network
   kafka:
     image: apache/kafka:3.9.0
     container_name: wallet-kafka
+    restart: unless-stopped
+    mem_limit: 640m
     ports:
       - "9094:9094"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9094,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094
+      KAFKA_LISTENERS: PLAINTEXT://:9094,INTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9094,INTERNAL://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx384m # the default is a 1 GB heap
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  # ------------------------------------------------------------------ application services (profile "app")
+  auth-service:
+    <<: *java-service
+    build: { context: ., target: auth-service }
+    environment:
+      <<: *secrets
+      SPRING_DATASOURCE_URL: jdbc:postgresql://auth-db:5432/auth_db
+    depends_on:
+      auth-db: { condition: service_healthy }
+    healthcheck: &java-health
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8092/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  account-service:
+    <<: *java-service
+    build: { context: ., target: account-service }
+    environment:
+      <<: *secrets
+      SPRING_DATASOURCE_URL: jdbc:postgresql://account-db:5432/account_db
+    depends_on:
+      account-db: { condition: service_healthy }
+    healthcheck:
+      <<: *java-health
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8091/actuator/health || exit 1"]
+
+  transaction-service:
+    <<: *java-service
+    build: { context: ., target: transaction-service }
+    environment:
+      <<: *secrets
+      SPRING_DATASOURCE_URL: jdbc:postgresql://transaction-db:5432/transaction_db
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      APP_ACCOUNTS_BASE_URL: http://account-service:8091
+    depends_on:
+      transaction-db: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      account-service: { condition: service_healthy }
+    healthcheck:
+      <<: *java-health
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8093/actuator/health || exit 1"]
+
+  notification-service:
+    <<: *java-service
+    build: { context: ., target: notification-service }
+    environment:
+      <<: *secrets
+      SPRING_DATASOURCE_URL: jdbc:postgresql://notification-db:5432/notification_db
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      notification-db: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    healthcheck:
+      <<: *java-health
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8094/actuator/health || exit 1"]
+
+  # the only service with a published port: everything else is reachable only through it
+  api-gateway:
+    <<: *java-service
+    build: { context: ., target: api-gateway }
+    ports:
+      - "8080:8080"
+    environment:
+      <<: *secrets
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      APP_SERVICES_AUTH_URL: http://auth-service:8092
+      APP_SERVICES_ACCOUNT_URL: http://account-service:8091
+      APP_SERVICES_TRANSACTION_URL: http://transaction-service:8093
+      APP_SERVICES_NOTIFICATION_URL: http://notification-service:8094
+    depends_on:
+      redis: { condition: service_healthy }
+      auth-service: { condition: service_healthy }
+      account-service: { condition: service_healthy }
+      transaction-service: { condition: service_healthy }
+      notification-service: { condition: service_healthy }
+    healthcheck:
+      <<: *java-health
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8080/actuator/health || exit 1"]
 
 volumes:
   account-db-data:

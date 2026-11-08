@@ -14,6 +14,33 @@ Each service owns its own PostgreSQL database (ports 5443, 5442, 5444, 5445). Ka
 
 Clients (the React / Vue / mobile apps) talk only to the gateway on `:8080`; the other ports are for local development.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    client([Web / mobile client])
+    client -->|HTTPS + JWT| gw[api-gateway :8080<br/>JWT check, rate limit,<br/>request id, CORS]
+    gw <-->|rate-limit counters| redis[(Redis)]
+
+    gw --> auth[auth-service :8092]
+    gw --> acc[account-service :8091]
+    gw --> tx[transaction-service :8093]
+    gw --> notif[notification-service :8094]
+
+    auth --- authdb[(auth db)]
+    acc --- accdb[(account db)]
+    tx --- txdb[(transaction db<br/>transfers, ledger, outbox)]
+    notif --- notifdb[(notification db)]
+
+    tx -->|"debit / credit<br/>(idempotent, API key)<br/>/internal/accounts"| acc
+    tx -.->|outbox publisher| kafka{{Kafka<br/>transfer-events}}
+    kafka -.->|idempotent consumer| notif
+    kafka -.->|poison messages| dlt{{transfer-events.DLT}}
+```
+
+Solid arrows are synchronous HTTP calls, dotted arrows go through Kafka. Each service owns its database and no
+service reads another one's tables.
+
 ## The API gateway
 
 - **Routing:** `/api/auth/**`, `/api/accounts/**`, `/api/transfers/**`, `/api/notifications/**` go to their service.
@@ -41,7 +68,10 @@ Clients (the React / Vue / mobile apps) talk only to the gateway on `:8080`; the
 - [x] Testcontainers integration tests (`mvn verify`), CI (GitHub Actions)
 - [x] Kafka: transactional outbox in transaction-service, idempotent consumer + dead-letter topic in notification-service
 - [x] api-gateway: routing, JWT check at the edge, Redis rate limiting, request ids, CORS
-- [ ] Deploy (AWS), load test, architecture diagram
+- [x] Dockerfile per service, whole system with one `docker compose` command, smoke test (also run in CI)
+- [x] Architecture diagram
+- [ ] Load test with measured numbers
+- [ ] Deploy (AWS)
 
 ## How a transfer works
 
@@ -98,6 +128,17 @@ transaction-service                                              notification-se
   everything behind it; transient errors are retried twice first.
 
 ## Run locally
+
+**The whole system in containers, one command** (needs Docker with at least 3 GB of memory; it uses about 2 GB; the first build takes a few minutes):
+```bash
+docker compose --profile app up -d --build --wait     # builds the 5 images, starts everything, waits until healthy
+./scripts/smoke-test.sh                               # signs up two users, transfers money, checks the notification
+docker compose --profile app down                     # stop (add -v to also delete the data)
+```
+Only the gateway is published (`http://localhost:8080`); the services are reachable only inside the compose network.
+Set `JWT_SECRET` and `INTERNAL_API_KEY` in a `.env` file (see `.env.example`) for anything but your own laptop.
+
+**Developing the services from your IDE** (infrastructure in Docker, services on your machine):
 ```bash
 docker compose up -d                                  # PostgreSQL x4 + Kafka + Redis
 mvn -pl api-gateway spring-boot:run                   # http://localhost:8080  <- use this one
