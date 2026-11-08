@@ -1,0 +1,42 @@
+server:
+  port: 8094
+
+spring:
+  application:
+    name: notification-service
+  datasource:
+    url: jdbc:postgresql://localhost:5445/notification_db
+    username: wallet
+    password: wallet
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  kafka:
+    bootstrap-servers: localhost:9094
+    consumer:
+      group-id: notification-service
+      # a brand-new consumer group reads the topic from its start instead of missing earlier events
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      # only used to publish poison messages to the dead-letter topic
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+app:
+  jwt:
+    # Must match auth-service. DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+    issuer: fintech-wallet-auth
+  kafka:
+    topic: transfer-events
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

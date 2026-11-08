@@ -1,0 +1,110 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  data:
+    redis:
+      host: localhost
+      port: 6390
+  cloud:
+    gateway:
+      server:
+        webflux:
+          default-filters:
+            # the service-to-service key must never be accepted from a client, whatever it sends
+            - RemoveRequestHeader=X-Internal-Api-Key
+          globalcors:
+            cors-configurations:
+              '[/**]':
+                allowed-origin-patterns: ${app.cors.allowed-origins}
+                allowed-methods: GET,POST,OPTIONS
+                allowed-headers: Authorization,Content-Type,Idempotency-Key,X-Request-Id
+                exposed-headers: X-Request-Id,X-RateLimit-Remaining,X-RateLimit-Burst-Capacity
+                max-age: 3600
+          # Only the paths listed here are reachable from outside. There is deliberately NO route for
+          # /internal/** (service-to-service API) or for the actuator of any service.
+          routes:
+            - id: auth
+              uri: ${app.services.auth-url}
+              predicates:
+                - Path=/api/auth/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    # per client IP: login and register are the targets of password guessing
+                    key-resolver: "#{@ipKeyResolver}"
+                    redis-rate-limiter.replenishRate: ${app.rate-limit.auth.replenish-rate}
+                    redis-rate-limiter.burstCapacity: ${app.rate-limit.auth.burst-capacity}
+                    redis-rate-limiter.requestedTokens: ${app.rate-limit.auth.requested-tokens}
+
+            - id: accounts
+              uri: ${app.services.account-url}
+              predicates:
+                - Path=/api/accounts/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: ${app.rate-limit.general.replenish-rate}
+                    redis-rate-limiter.burstCapacity: ${app.rate-limit.general.burst-capacity}
+
+            - id: transfers
+              uri: ${app.services.transaction-url}
+              predicates:
+                - Path=/api/transfers/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    # moving money gets a tighter limit than reading data
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: ${app.rate-limit.transfers.replenish-rate}
+                    redis-rate-limiter.burstCapacity: ${app.rate-limit.transfers.burst-capacity}
+
+            - id: notifications
+              uri: ${app.services.notification-url}
+              predicates:
+                - Path=/api/notifications/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    key-resolver: "#{@userKeyResolver}"
+                    redis-rate-limiter.replenishRate: ${app.rate-limit.general.replenish-rate}
+                    redis-rate-limiter.burstCapacity: ${app.rate-limit.general.burst-capacity}
+
+app:
+  jwt:
+    # Must match auth-service. DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
+    secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
+    issuer: fintech-wallet-auth
+  services:
+    auth-url: http://localhost:8092
+    account-url: http://localhost:8091
+    transaction-url: http://localhost:8093
+    notification-url: http://localhost:8094
+  cors:
+    # browser frontends (React / Vue dev servers)
+    allowed-origins: http://localhost:5173,http://localhost:3000
+  # Token bucket in Redis. A request costs `requested-tokens`; the bucket refills `replenish-rate` tokens per second
+  # up to `burst-capacity`. Defaults:
+  #   auth       : bucket 60, each request costs 12  -> a burst of 5, then about 5 per minute, per IP
+  #   transfers  : a burst of 10, then 5 per second, per user
+  #   everything else: a burst of 40, then 20 per second, per user
+  rate-limit:
+    auth:
+      replenish-rate: 1
+      burst-capacity: 60
+      requested-tokens: 12
+    transfers:
+      replenish-rate: 5
+      burst-capacity: 10
+    general:
+      replenish-rate: 20
+      burst-capacity: 40
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

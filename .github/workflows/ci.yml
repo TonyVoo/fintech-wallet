@@ -43,3 +43,27 @@ jobs:
             **/target/surefire-reports/
             **/target/failsafe-reports/
           retention-days: 7
+
+  # Builds the real Docker images, starts the whole system and drives it through the gateway, the way a client would.
+  docker-smoke-test:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Build images and start the system
+        run: docker compose --profile app up -d --build --wait --wait-timeout 600
+
+      - name: Smoke test through the gateway
+        run: ./scripts/smoke-test.sh
+
+      - name: Show container logs
+        if: failure()
+        run: docker compose --profile app logs --tail=150
+
+      - name: Stop the system
+        if: always()
+        run: docker compose --profile app down -v

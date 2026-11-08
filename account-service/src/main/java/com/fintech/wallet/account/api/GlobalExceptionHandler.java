@@ -2,6 +2,7 @@ package com.fintech.wallet.account.api;
 
 import com.fintech.wallet.account.domain.AccountNotFoundException;
 import com.fintech.wallet.account.domain.InsufficientFundsException;
+import com.fintech.wallet.account.domain.OperationConflictException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -19,6 +20,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InsufficientFundsException.class)
     public ProblemDetail insufficientFunds(InsufficientFundsException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, ex.getMessage());
+    }
+
+    @ExceptionHandler(OperationConflictException.class)
+    public ProblemDetail operationConflict(OperationConflictException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     @ExceptionHandler(OptimisticLockingFailureException.class)

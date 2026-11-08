@@ -2,6 +2,7 @@ package com.fintech.wallet.account.service;
 
 import com.fintech.wallet.account.domain.Account;
 import com.fintech.wallet.account.domain.AccountNotFoundException;
+import com.fintech.wallet.account.repository.AccountOperationRepository;
 import com.fintech.wallet.account.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,7 +21,8 @@ class AccountServiceAuthorizationTest {
 
     private final AccountRepository repository = mock(AccountRepository.class);
     private final AccountService service = new AccountService(
-            repository, mock(PlatformTransactionManager.class), new OptimisticLockRetry(1, 0, 0));
+            repository, mock(AccountOperationRepository.class),
+            mock(PlatformTransactionManager.class), new OptimisticLockRetry(1, 0, 0));
 
     private final CurrentUser owner = new CurrentUser(UUID.randomUUID(), false);
     private final CurrentUser stranger = new CurrentUser(UUID.randomUUID(), false);

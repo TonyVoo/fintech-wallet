@@ -20,6 +20,9 @@ app:
     # Must match auth-service. DEV DEFAULT ONLY: override with JWT_SECRET in any real environment.
     secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LXBsZWFzZS1jaGFuZ2UtaW4tcHJvZC0wMTIzNDU2Nzg5}
     issuer: fintech-wallet-auth
+  internal:
+    # Shared with the services that call /internal/**. DEV DEFAULT ONLY: override with INTERNAL_API_KEY.
+    api-key: ${INTERNAL_API_KEY:dev-internal-key-change-me}
 
 management:
   endpoints:
