@@ -4,12 +4,35 @@ E-wallet / payment system built as microservices with Java 17 and Spring Boot 3.
 
 | Service | Port | Responsibility |
 |---|---|---|
+| api-gateway | 8080 | The only entry point: routing, JWT check at the edge, Redis rate limiting, request ids, CORS |
 | auth-service | 8092 | Register / login, JWT access tokens, rotating refresh tokens |
 | account-service | 8091 | Accounts and balances, per-owner access control, idempotent internal debit/credit |
 | transaction-service | 8093 | Money transfers between accounts (saga), double-entry ledger, crash recovery, transactional outbox |
 | notification-service | 8094 | Consumes transfer events from Kafka and stores per-user notifications |
 
-Each service owns its own PostgreSQL database (ports 5443, 5442, 5444, 5445). Kafka runs on port 9094.
+Each service owns its own PostgreSQL database (ports 5443, 5442, 5444, 5445). Kafka runs on port 9094, Redis on 6390.
+
+Clients (the React / Vue / mobile apps) talk only to the gateway on `:8080`; the other ports are for local development.
+
+## The API gateway
+
+- **Routing:** `/api/auth/**`, `/api/accounts/**`, `/api/transfers/**`, `/api/notifications/**` go to their service.
+  There is deliberately no route for `/internal/**` (the service-to-service API) or any actuator endpoint, so they
+  cannot be reached from outside. The `X-Internal-Api-Key` header is stripped from client requests.
+- **Authentication at the edge:** a missing, expired or forged token is rejected with 401 before any service is called.
+  The services still verify the token themselves, so the gateway is not the only door they trust.
+- **Rate limiting** (token bucket in Redis, answers `429` with `X-RateLimit-*` headers):
+
+  | Route | Counted per | Default limit |
+  |---|---|---|
+  | `/api/auth/**` (login, register) | client IP | burst of 5, then about 5 per minute |
+  | `/api/transfers/**` | user (JWT subject) | burst of 10, then 5 per second |
+  | accounts, notifications | user | burst of 40, then 20 per second |
+
+  The limit follows the verified user, not the token, so requesting new tokens does not give a new allowance.
+  `X-Forwarded-For` is not trusted (a client could invent it to dodge the limit).
+- **X-Request-Id** on every response (also on 401 and 429), forwarded to the services so one request can be followed.
+- **CORS** for the local frontend dev servers (`localhost:5173`, `localhost:3000`); change `app.cors.allowed-origins`.
 
 ## Roadmap
 - [x] auth-service: register/login, JWT access token, rotating refresh tokens with reuse detection
@@ -17,7 +40,7 @@ Each service owns its own PostgreSQL database (ports 5443, 5442, 5444, 5445). Ka
 - [x] transaction-service: idempotent transfers, saga with compensation, double-entry ledger, recovery job
 - [x] Testcontainers integration tests (`mvn verify`), CI (GitHub Actions)
 - [x] Kafka: transactional outbox in transaction-service, idempotent consumer + dead-letter topic in notification-service
-- [ ] api-gateway, Redis rate limit
+- [x] api-gateway: routing, JWT check at the edge, Redis rate limiting, request ids, CORS
 - [ ] Deploy (AWS), load test, architecture diagram
 
 ## How a transfer works
@@ -76,7 +99,8 @@ transaction-service                                              notification-se
 
 ## Run locally
 ```bash
-docker compose up -d                                  # PostgreSQL x4 + Kafka
+docker compose up -d                                  # PostgreSQL x4 + Kafka + Redis
+mvn -pl api-gateway spring-boot:run                   # http://localhost:8080  <- use this one
 mvn -pl auth-service spring-boot:run                  # http://localhost:8092
 mvn -pl account-service spring-boot:run               # http://localhost:8091
 mvn -pl transaction-service spring-boot:run           # http://localhost:8093
@@ -94,20 +118,20 @@ The integration tests use `apache/kafka:3.8.0`: Testcontainers 1.21 does not sta
 ## Try it
 ```bash
 # 1. register + login (returns an accessToken), then create accounts with it
-curl -X POST localhost:8092/api/auth/register -H 'Content-Type: application/json' \
+curl -X POST localhost:8080/api/auth/register -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com","password":"password123"}'
-curl -X POST localhost:8092/api/auth/login -H 'Content-Type: application/json' \
+curl -X POST localhost:8080/api/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"alice@example.com","password":"password123"}'
-curl -X POST localhost:8091/api/accounts -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+curl -X POST localhost:8080/api/accounts -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"ownerName":"Alice","currency":"VND"}'
 
 # 2. transfer (the Idempotency-Key is chosen by the client, one per intended transfer)
-curl -X POST localhost:8093/api/transfers -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
+curl -X POST localhost:8080/api/transfers -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{"fromAccountId":"<id>","toAccountId":"<id>","amount":300}'
 
 # 3. a moment later both users see a notification (use each user's own token)
-curl localhost:8094/api/notifications -H "Authorization: Bearer $TOKEN"
+curl localhost:8080/api/notifications -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Known limitations
@@ -120,3 +144,8 @@ curl localhost:8094/api/notifications -H "Authorization: Bearer $TOKEN"
 - The event contract (`TransferEvent`) is duplicated in transaction-service and notification-service on purpose (no
   shared library); a contract test between them does not exist yet.
 - Notifications are stored and logged, not actually sent by email or push.
+- If Redis is unreachable the gateway's rate limiter lets requests through (Spring Cloud Gateway's default). That
+  keeps the system available but removes the brute-force protection while Redis is down; this behaviour is not tested here.
+- Behind a load balancer the gateway would see the balancer's address for every client; the trusted proxy must be
+  configured before the per-IP limit on login means anything.
+- The gateway has no circuit breaker or retry for slow services yet.

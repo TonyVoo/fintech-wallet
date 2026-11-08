@@ -47,6 +47,13 @@ services:
     volumes:
       - notification-db-data:/var/lib/postgresql/data
 
+  # rate-limit counters of the api-gateway; host port 6390 to avoid clashing with other local Redis servers
+  redis:
+    image: redis:7-alpine
+    container_name: wallet-redis
+    ports:
+      - "6390:6379"
+
   # single-node Kafka in KRaft mode (no ZooKeeper); host port 9094 to avoid clashing with other local brokers
   kafka:
     image: apache/kafka:3.9.0
